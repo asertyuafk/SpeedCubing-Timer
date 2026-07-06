@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Timer</title>
+    <style>
+        <!-- body {  -->
+            background-color: #04021c; color: white; font-family: monospace; 
+            display: flex; flex-direction: column; align-items: center; 
+            padding: 20px; margin: 0; user-select: none; overflow-x: hidden;
+            transition: background 0.3s;
+			transition: background-color 0.5s ease; /* Плавная смена цвета */
+        }
+        /* Стили для спец-режимов */
+
+        .hide-on-run { transition: opacity 0.2s; }
+        .running .hide-on-run { opacity: 0; visibility: hidden; }
+        
+        #scramble { 
+            font-size: 1.2rem; text-align: center; margin: 15px; min-height: 3em; 
+            max-width: 900px; color: #ccc; background: rgba(0,0,0,0.2); 
+            padding: 10px; border-radius: 5px; 
+        }
+        #timer { 
+            font-size: 8rem; font-weight: bold; margin: 40px 0; 
+            font-variant-numeric: tabular-nums; transition: transform 0.2s; z-index: 100; 
+        }
+        .running #timer { transform: scale(1.3); }
+        
+        .controls, .stats, .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 20px; }
+        .stats b { color: #00d4ff; }
+        
+        button, select { 
+            background: #1a1a2e; color: white; border: 1px solid #444; 
+            padding: 8px 15px; cursor: pointer; font-family: monospace; border-radius: 4px;
+        }
+        button:hover { background: #252545; }
+
+        table { border-collapse: collapse; width: 100%; max-width: 800px; background: rgba(255,255,255,0.05); }
+        th, td { border: 1px solid #333; padding: 8px; text-align: center; }
+        
+        .ready { color: #00ff88 !important; }
+        .wait { color: #ff4444 !important; }
+        .dnf { color: #ff4444; text-decoration: line-through; }
+        .new-record { animation: record-glow 1s infinite; color: #ffd700 !important; }
+        
+        @keyframes record-glow { 0%, 100% { text-shadow: 0 0 10px #ffd700; } 50% { text-shadow: 0 0 30px #ffd700; } }
+
+        /* Уведомление об ачивке */
+        #achieve-toast {
+            position: fixed; bottom: 20px; right: 20px; background: #00d4ff; color: #04021c;
+            padding: 15px 25px; border-radius: 10px; font-weight: bold; z-index: 1000;
+            transform: translateY(150%); transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 5px 15px rgba(0,212,255,0.4); display: flex; align-items: center; gap: 10px;
+        }
+        #achieve-toast.show { transform: translateY(0); }
+
+        /* Модалка достижений */
+        #ach-modal {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #1a1a2e; border: 2px solid #00d4ff; padding: 20px;
+            z-index: 2000; width: 320px; max-height: 70vh; overflow-y: auto;
+            display: none; border-radius: 10px;
+        }
+        .ach-item { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; opacity: 0.3; filter: grayscale(1); }
+        .ach-item.unlocked { opacity: 1; filter: none; color: #00d4ff; }
+        
+        .hidden { display: none !important; }
+        canvas { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 5; }
+    </style>
+</head>
+<body>
+
+<canvas id="confetti"></canvas>
+
+<div class="controls hide-on-run">
+    <select id="pSel" onchange="initSubModes(); switchP();">
+        <option value="c2">2x2</option>
+        <option value="c3" selected>3x3</option>
+        <option value="c4">4x4</option>
+        <option value="c5">5x5</option>
+        <option value="c6">6x6</option>
+        <option value="c7">7x7</option>
+        <option value="p">Pyraminx</option>
+        <option value="s">Skewb</option>
+        <option value="clock">Clock</option>
+        <option value="sq1">Square-1</option>
+        <option value="mega">Megaminx</option>
+    </select>
+    <div id="subModeContainer">
+        <select id="subMode" onchange="switchP()"></select>
+    </div>
+    <button onclick="toggleAchModal()">Достижения</button>
+    <button onclick="exportData()">Экспорт JSON</button>
+    <button onclick="document.getElementById('importFile').click()">Импорт JSON</button>
+    <input type="file" id="importFile" class="hidden" accept=".json" onchange="importData(this)">
+    <button onclick="clearData()" style="color:#ff4444">Очистить</button>
+</div>
+
+<div id="scramble" class="hide-on-run">Генерация...</div>
+<div id="timer">0.00</div>
+
+<div class="actions hide-on-run" id="btns" style="visibility: hidden;">
+    <button id="fmcAdd" class="hidden" onclick="fmcCommit()">Записать ходы</button>
+    <button id="modP2" onclick="modLast('+2')">+2</button>
+    <button id="modDNF" onclick="modLast('DNF')">DNF</button>
+    <button onclick="modLast('DEL')">Удалить</button>
+</div>
+
+<div class="stats hide-on-run">
+    <div>Best: <b id="bT">-</b></div><div>Current: <b id="cT">-</b></div>
+    <div>mo3: <b id="mo3">-</b></div><div>ao5: <b id="ao5">-</b></div>
+    <div>ao12: <b id="ao12">-</b></div><div>ao100: <b id="ao100">-</b></div>
+</div>
+
+<table class="hide-on-run">
+    <thead><tr><th>#</th><th>Результат</th><th>Скрамбл</th></tr></thead>
+    <tbody id="tbody"></tbody>
+</table>
+
+<div id="achieve-toast"><span style="font-size:1.5rem"></span> <div id="ach-text"></div></div>
+<div id="ach-modal">
+    <span onclick="toggleAchModal()" style="float:right; cursor:pointer">✖</span>
+    <h3>Достижения</h3>
+    <div id="ach-list"></div>
+</div>
+
+<script>
+const moves = {
+    c2: ["R","L","U","F","D","B"], c3: ["R","L","U","F","D","B"],
+    c4: ["R","L","U","F","D","B","Rw","Lw","Uw","Fw","Dw","Bw"],
+    p: ["U","R","L","B"], s: ["R","U","B","L"]
+};
+const suffixes = ["", "'", "2"];
+const ACHIEVEMENTS = [
+    { id: 'first', title: 'Новичок', desc: 'Первая сборка', icon: '', check: (db, k) => db[k]?.length >= 1 },
+    { id: 'sub20', title: 'Спринтер', desc: '3x3 быстрее 20 сек', icon: '', check: (db, k, ms) => ms < 20000 && k.startsWith('c3') },
+    { id: 'marathon', title: 'Марафонец', desc: '50 сборок в сессии', icon: '', check: (db, k) => db[k]?.length >= 50 },
+    { id: 'mirror', title: 'Зазеркалье', desc: 'Сборка Mirror-куба', icon: '', check: (db, k) => k.includes('mirror') },
+    { id: 'stable', title: 'Стабильность', desc: '10 сборок без DNF', icon: '', check: (db, k) => db[k]?.slice(-10).length === 10 && db[k].slice(-10).every(s => !s.dnf) },
+    { id: 'night', title: 'Ночной житель', desc: 'Сборка ночью (00-05)', icon: '', check: () => { let h = new Date().getHours(); return h >= 0 && h < 5; } },
+    { id: 'lucky', title: 'Везунчик', desc: 'Скрамбл < 10 ходов', icon: '', check: (db, k) => curScr.split(' ').length < 10 && (k.startsWith('c2') || k.startsWith('p')) },
+    { id: 'master', title: 'Мастер 3х3', desc: '100 сборок 3х3', icon: '', check: (db) => db['c3_normal']?.length >= 100 },
+    { id: 'speed', title: 'Скорость света', desc: 'Сборка быстрее 10 сек', icon: '', check: (db, k, ms) => ms < 10000 && ms > 0 },
+    { id: 'collector', title: 'Коллекционер', desc: 'Собрано 5 видов кубов', icon: '', check: (db) => Object.keys(db).filter(k => db[k].length > 0).length >= 5 }
+];
+
+let db = JSON.parse(localStorage.getItem('cubeDB_vFinal')) || {};
+let run = false, ready = false, hT, sT, iv, curScr = "", bestBefore = Infinity, fmcCounter = 0;
+
+const timer = document.getElementById('timer');
+const pSel = document.getElementById('pSel');
+const subMode = document.getElementById('subMode');
+const btns = document.getElementById('btns');
+const canvas = document.getElementById('confetti');
+const ctx = canvas.getContext('2d');
+
+function formatTime(ms) {
+    if (ms === Infinity || isNaN(ms)) return "-";
+    let totalSeconds = ms / 1000;
+    if (totalSeconds < 60) return totalSeconds.toFixed(2);
+    let min = Math.floor(totalSeconds / 60);
+    let sec = (totalSeconds % 60).toFixed(2);
+    return `${min}:${sec.padStart(5, '0')}`;
+}
+function updateHeatmap(ms) {
+    if (bestBefore === Infinity || bestBefore === 0) return;
+
+    // Считаем отношение текущего времени к рекорду (от 0 до 1)
+    let ratio = ms / bestBefore;
+
+    if (ratio < 0.8) {
+        // До 80% времени от рекорда — спокойный синий
+        document.body.style.backgroundColor = "#04021c";
+    } else if (ratio >= 0.8 && ratio <= 1.0) {
+        // От 80% до 100% — плавно переходим в золотой (ты близок к рекорду!)
+        // Интерполируем от темно-синего к золотому
+        document.body.style.backgroundColor = "#2c2401"; 
+    } else {
+        // Если время превысило рекорд — уходим в глубокий красный
+        document.body.style.backgroundColor = "#240404";
+    }
+}
+
+function initSubModes() {
+    const p = pSel.value;
+    subMode.innerHTML = "";
+    const config = {
+        'c2': ['Normal', 'Blind', 'OH', 'Mirror'],
+        'c3': ['Normal', 'Blind', 'OH', 'FMC', 'Mirror', 'Void'],
+        'c4': ['Normal', 'Blind', 'OH', 'Mirror'],
+        'c5': ['Normal', 'Blind', 'OH', 'Mirror'],
+        's': ['Normal', 'Mirror'],
+        'sq1': ['Square-0', 'Square-1', 'Square-2'],
+        'mega': ['Normal', 'Kilominx']
+    };
+    if (config[p]) {
+        document.getElementById('subModeContainer').classList.remove('hidden');
+        config[p].forEach(m => {
+            let opt = document.createElement('option');
+            opt.value = m.toLowerCase(); opt.innerText = m;
+            subMode.appendChild(opt);
+        });
+    } else {
+        document.getElementById('subModeContainer').classList.add('hidden');
+    }
+}
+
+function genScr() {
+    const p = pSel.value;
+    const mode = subMode.value;
+    if (p === 'mega') {
+        let lines = (mode === 'kilominx') ? 4 : 7;
+        let res = []; for (let i = 0; i < lines; i++) {
+            let line = []; for (let j = 0; j < 5; j++) {
+                line.push("R" + (Math.random() > 0.5 ? "++" : "--"));
+                line.push("D" + (Math.random() > 0.5 ? "++" : "--"));
+            }
+            line.push("U" + (Math.random() > 0.5 ? "'" : "")); res.push(line.join(" "));
+        }
+        curScr = res.join("<br>"); document.getElementById('scramble').innerHTML = curScr; return;
+    }
+    if (p === 'sq1') {
+        let res = [], step = (mode === 'square-0') ? 3 : (mode === 'square-2') ? 0.5 : 1;
+        let len = (mode === 'square-0') ? 10 : 15;
+        for (let i = 0; i < len; i++) {
+            let top = (Math.floor(Math.random() * (12 / step)) * step) - 5;
+            let bot = (Math.floor(Math.random() * (12 / step)) * step) - 5;
+            res.push(`(${top},${bot})`); if (i < len - 1) res.push("/");
+        }
+        curScr = res.join(" "); document.getElementById('scramble').innerText = curScr; return;
+    }
+    if (p === 'clock') {
+        const pin = ["UR", "DR", "UL", "DL", "U", "D", "R", "L", "ALL"];
+        let res = []; for (let i = 0; i < 9; i++) res.push(pin[i] + (Math.floor(Math.random() * 6) + 1) + (Math.random() > 0.5 ? "+" : "-"));
+        res.push("y2"); for (let i = 4; i < 9; i++) res.push(pin[i] + (Math.floor(Math.random() * 6) + 1) + (Math.random() > 0.5 ? "+" : "-"));
+        curScr = res.join(" "); document.getElementById('scramble').innerText = curScr; return;
+    }
+    let base = moves[p] || moves.c3, res = [], last = "", len = (p==='c2'||p==='p')?9:p==='s'?12:p==='c4'?40:20;
+    if(['c5','c6','c7'].includes(p)) { base = moves.c4; len = 60; }
+    for(let i=0; i<len; i++) {
+        let b = base[Math.floor(Math.random()*base.length)];
+        while(b === last) b = base[Math.floor(Math.random()*base.length)];
+        let s = (p==='p' && i>len-5) ? (Math.random()>0.5?"":"'").toLowerCase() : suffixes[Math.floor(Math.random()*suffixes.length)];
+        res.push((p==='p' && i>len-5) ? b.toLowerCase()+s : b+s); last = b;
+    }
+    curScr = res.join(" "); document.getElementById('scramble').innerText = curScr;
+}
+
+function getSessionKey() {
+    const p = pSel.value;
+    return (['c2','c3','c4','c5','sq1','mega','s'].includes(p)) ? `${p}_${subMode.value}` : p;
+}
+
+function update() {
+    let key = getSessionKey(); let active = db[key] || [];
+    localStorage.setItem('cubeDB_vFinal', JSON.stringify(db));
+    let isFMC = (key === 'c3_fmc');
+    let v = active.filter(t => !t.dnf).map(t => t.ms + (t.p2?2000:0));
+    let cb = v.length ? Math.min(...v) : Infinity;
+    
+    document.getElementById('bT').innerText = cb !== Infinity ? (isFMC ? cb : formatTime(cb)) : "-";
+    document.getElementById('cT').innerText = active.length ? (isFMC ? active[active.length-1].ms : formatTime(active[active.length-1].ms + (active[active.length-1].p2?2000:0))) : "-";
+    
+    ['mo3', 'ao5', 'ao12', 'ao100'].forEach(id => {
+        let val = getAvg(active, parseInt(id.replace(/\D/g,'')), id.startsWith('mo'), isFMC);
+        document.getElementById(id).innerText = (val === "DNF" || isFMC) ? val : formatTime(val * 1000);
+    });
+    document.getElementById('tbody').innerHTML = [...active].reverse().map((t, i) => `<tr><td>${active.length-i}</td><td class="${t.dnf?'dnf':''}">${isFMC?t.ms:formatTime(t.ms + (t.p2?2000:0))}${t.p2?'+':''}</td><td style="font-size:10px; color:#888;">${t.scr}</td></tr>`).join('');
+    return cb;
+}
+
+function getAvg(arr, n, mo, isFMC) {
+    if(arr.length < n) return "-";
+    let last = arr.slice(-n);
+    if(!mo && last.filter(x => x.dnf).length > 1) return "DNF";
+    if(mo && last.some(x => x.dnf)) return "DNF";
+    let times = last.map(x => x.dnf ? Infinity : x.ms + (x.p2?2000:0));
+    let res = mo ? (times.reduce((a,b)=>a+b)/n) : (() => { times.sort((a,b)=>a-b); times.shift(); times.pop(); return times.reduce((a,b)=>a+b)/(n-2); })();
+    return isFMC ? Math.round(res) : (res/1000).toFixed(2);
+}
+
+function switchP() {
+    timer.classList.remove('new-record');
+    document.body.classList.remove('mode-mirror', 'mode-void');
+    const key = getSessionKey();
+    if (subMode.value === 'mirror') document.body.classList.add('mode-mirror');
+    if (subMode.value === 'void') document.body.classList.add('mode-void');
+
+    if(key === 'c3_fmc') { timer.innerText = "0"; fmcCounter = 0; } else { timer.innerText = "0.00"; }
+    let active = db[key] || [];
+    let v = active.filter(t => !t.dnf).map(t => t.ms + (t.p2?2000:0));
+    bestBefore = v.length ? Math.min(...v) : Infinity;
+    genScr(); update();
+}
+
+// Управление таймером
+window.onkeydown = (e) => {
+    if(e.code === "Space") {
+        e.preventDefault();
+        if(getSessionKey() === 'c3_fmc') return;
+        if(run) { stop(); return; }
+        if(e.repeat || ready) return;
+        timer.className = 'wait';
+        hT = setTimeout(() => { ready = true; timer.className = 'ready'; }, 500);
+    } else if(run) stop();
+};
+window.onkeyup = (e) => {
+    if(e.code === "Space") {
+        if(getSessionKey() === 'c3_fmc') { fmcCounter++; timer.innerText = fmcCounter; btns.style.visibility = 'visible'; document.getElementById('fmcAdd').classList.remove('hidden'); return; }
+        clearTimeout(hT);
+        if(ready && !run) start(); else if(!run) timer.className = "";
+    }
+};
+
+function start() {
+    run = true; ready = false; sT = Date.now();
+    document.body.classList.add('running');
+    document.body.style.backgroundColor = "#04021c"; // Сброс на стандартный темный
+    btns.style.visibility = 'hidden';
+    iv = setInterval(() => { 
+        const elapsed = Date.now() - sT;
+        timer.innerText = formatTime(elapsed);
+        updateHeatmap(elapsed); // Вызываем обновление цвета
+    }, 10);
+}
+
+
+function stop() {
+    run = false; clearInterval(iv);
+    document.body.classList.remove('running');
+    let ms = Date.now() - sT; timer.innerText = formatTime(ms); timer.className = "";
+    let key = getSessionKey();
+    if(!db[key]) db[key] = [];
+    db[key].push({ms: ms, scr: curScr, dnf: false, p2: false});
+    if(ms < bestBefore && ms > 0) { 
+        timer.classList.add('new-record'); 
+        document.body.style.backgroundColor = "#1a4d1a"; // Зеленый при рекорде!
+        createConfetti(); 
+    } else {
+        document.body.style.backgroundColor = "#04021c"; // Возврат к обычному
+    }
+    btns.style.visibility = 'visible'; 
+    document.getElementById('fmcAdd').classList.add('hidden');
+    update(); genScr(); checkAchievements(ms);
+}
+
+function fmcCommit() {
+    let key = 'c3_fmc'; if(!db[key]) db[key] = [];
+    db[key].push({ms: fmcCounter, scr: curScr, dnf: false, p2: false});
+    fmcCounter = 0; timer.innerText = "0"; update(); genScr(); checkAchievements(0);
+}
+
+function modLast(type) {
+    let active = db[getSessionKey()]; if (!active || !active.length) return;
+    let l = active[active.length-1];
+    if(type==='+2') l.p2 = !l.p2; if(type==='DNF') l.dnf = !l.dnf; if(type==='DEL') active.pop();
+    update();
+}
+
+// Достижения
+function checkAchievements(ms) {
+    const key = getSessionKey();
+    let unlocked = JSON.parse(localStorage.getItem('cube_achievements')) || [];
+    ACHIEVEMENTS.forEach(ach => {
+        if (!unlocked.includes(ach.id) && ach.check(db, key, ms)) {
+            unlocked.push(ach.id);
+            localStorage.setItem('cube_achievements', JSON.stringify(unlocked));
+            showAchievement(ach.desc);
+            createConfetti();
+        }
+    });
+}
+function showAchievement(text) {
+    const toast = document.getElementById('achieve-toast');
+    document.getElementById('ach-text').innerText = text;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 4000);
+}
+function toggleAchModal() {
+    const m = document.getElementById('ach-modal');
+    if(m.style.display === 'block') m.style.display='none';
+    else { renderAchList(); m.style.display='block'; }
+}
+function renderAchList() {
+    const unlocked = JSON.parse(localStorage.getItem('cube_achievements')) || [];
+    document.getElementById('ach-list').innerHTML = ACHIEVEMENTS.map(ach => `
+        <div class="ach-item ${unlocked.includes(ach.id)?'unlocked':''}">
+            <span style="font-size:1.5rem">${ach.icon}</span>
+            <div><b>${ach.title}</b><br><small>${ach.desc}</small></div>
+        </div>
+    `).join('');
+}
+
+// JSON Сервисы
+function exportData() {
+    const blob = new Blob([JSON.stringify(db, null, 2)], {type: "application/json"});
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `cubing_stats_${new Date().toISOString().slice(0,10)}.json`; a.click();
+}
+function importData(input) {
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            db = {...db, ...JSON.parse(e.target.result)};
+            localStorage.setItem('cubeDB_vFinal', JSON.stringify(db));
+            switchP(); alert("Данные импортированы!");
+        } catch(err) { alert("Ошибка файла!"); }
+    };
+    reader.readAsText(input.files[0]);
+}
+
+function clearData() { if(confirm("Очистить историю?")) { db[getSessionKey()] = []; update(); } }
+
+// Конфетти
+let particles = [];
+function createConfetti() {
+    particles = [];
+    for(let i=0; i<50; i++) particles.push({x:canvas.width/2, y:canvas.height/2, v:Math.random()*10+2, d:Math.random()*Math.PI*2, c:`hsl(${Math.random()*360},100%,50%)`, r:Math.random()*5+2});
+    updateConfetti();
+}
+function updateConfetti() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    particles.forEach((p,i) => {
+        p.x += Math.cos(p.d)*p.v; p.y += Math.sin(p.d)*p.v + 1; p.v *= 0.92;
+        ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+        if(p.y > canvas.height) particles.splice(i,1);
+    });
+    if(particles.length) requestAnimationFrame(updateConfetti);
+}
+window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+window.onresize();
+
+initSubModes();
+switchP();
+</script>
+</body>
+</html>
